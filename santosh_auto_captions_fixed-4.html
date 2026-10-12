@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111827">
+<title>Santosh Auto Captions</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#151d30;--line:#2b3650;--text:#f8fafc;--muted:#a9b6cc;--green:#72e5a2}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(160deg,#101a31,#090d18 65%);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--text)}
+main{max-width:760px;margin:auto;padding:20px 14px 40px}.brand{text-align:center;padding:14px 0 22px}.logo{font-size:38px}.brand h1{margin:4px 0;font-size:27px}.brand p{color:var(--muted);margin:4px 0;font-size:14px}
+.card{background:rgba(21,29,48,.96);border:1px solid var(--line);border-radius:18px;padding:16px;margin:12px 0}.card h2{font-size:17px;margin:0 0 12px}
+label{display:block;font-size:14px;color:#dbe5f5;margin:12px 0 6px}input,select,textarea,button{font:inherit}input[type=file],select,textarea,input[type=text]{width:100%;background:#0b1222;color:var(--text);border:1px solid #35425d;border-radius:11px;padding:12px}
+button{border:0;border-radius:12px;padding:13px 15px;font-weight:750;cursor:pointer;width:100%;margin-top:10px;background:var(--green);color:#08130c}button.secondary{background:#26334c;color:white;border:1px solid #3b4a68}button:disabled{opacity:.45;cursor:not-allowed}
+.small{font-size:12px;color:var(--muted);line-height:1.5}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.preview{width:100%;max-height:390px;background:#030712;border-radius:12px;margin-top:12px}.status{padding:10px 12px;background:#0b1222;border:1px solid var(--line);border-radius:10px;color:#dce7f8;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.progress{height:7px;border-radius:10px;background:#28344b;overflow:hidden;margin:10px 0}.progress span{display:block;height:100%;width:0;background:var(--green);transition:width .2s}.caption-row{border-bottom:1px solid var(--line);padding:10px 0}.caption-row textarea{min-height:65px;margin-top:6px}.hidden{display:none!important}.pill{display:inline-block;border:1px solid #3a4966;border-radius:999px;padding:5px 9px;font-size:12px;color:#dce7f8}
+@media(max-width:480px){main{padding:14px 10px 30px}.row{grid-template-columns:1fr}.brand h1{font-size:24px}.card{padding:13px}}
+</style>
+</head>
+<body>
+<main>
+<header class="brand"><div class="logo">🎬</div><h1>Santosh Auto Captions</h1><p>Generate captions in Hindi, Marathi, English, and Gujarati</p><span class="pill">Browser-based • No API key</span></header>
+<section class="card"><h2>1. Choose your video</h2><input id="videoFile" type="file" accept="video/*"><video id="preview" class="preview hidden" controls playsinline></video><p class="small">For mobile, test with a short 10–30 second video first. The first run downloads audio tools and a speech-recognition model. Keep this page open while it works.</p></section>
+<section class="card"><h2>2. Caption settings</h2><label for="language">Spoken language in the video</label><select id="language"><option value="hindi">Hindi — हिंदी</option><option value="marathi">Marathi — मराठी</option><option value="english">English</option><option value="gujarati">Gujarati — ગુજરાતી</option></select><div class="row"><div><label for="fontSize">Caption size</label><select id="fontSize"><option value="24">Small</option><option value="32" selected>Medium</option><option value="42">Large</option></select></div><div><label for="position">Position</label><select id="position"><option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option></select></div></div><button id="generate">Generate captions</button><div class="progress"><span id="bar"></span></div><div id="status" class="status" role="status">Choose a video to begin.</div></section>
+<section class="card hidden" id="editCard"><h2>3. Review and edit captions</h2><p class="small">Check names and punctuation. Speech recognition can make mistakes, especially with background music or overlapping voices.</p><div id="captionList"></div><div class="row"><button id="srtBtn" class="secondary">Download SRT</button><button id="burnBtn">Make captioned video</button></div><p class="small">Video export runs on your device and may be slow on phones. If export fails, you can still download SRT captions and use them in your video editor.</p><div id="exportStatus" class="status hidden"></div><a id="videoDownload" class="hidden" download="santosh-captioned-video.mp4" style="display:block;margin-top:12px;color:var(--green)">Download captioned video</a></section>
+<footer class="small" style="text-align:center;padding:10px 4px">Free prototype. No account or API key. Processing speed depends on your device and browser memory.</footer>
+</main>
+<script type="module">
+const $ = id => document.getElementById(id);
+let sourceFile = null, sourceUrl = null, captions = [], ffmpeg = null, ffmpegReady = false, busy = false;
+let audioDuration = 0;
+const languageNames = {hindi:"hindi", marathi:"marathi", english:"english", gujarati:"gujarati"};
+function status(s){$("status").textContent=s}
+function exportStatus(s){$("exportStatus").classList.remove("hidden");$("exportStatus").textContent=s}
+function setProgress(n){$("bar").style.width=Math.max(0,Math.min(100,n))+"%"}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function timeSrt(t){t=Math.max(0,Number(t)||0);let ms=Math.round(t*1000),h=Math.floor(ms/3600000);ms%=3600000;let m=Math.floor(ms/60000);ms%=60000;let s=Math.floor(ms/1000);ms%=1000;return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")},${String(ms).padStart(3,"0")}`}
+function getSrt(){return captions.map((c,i)=>`${i+1}\n${timeSrt(c.start)} --> ${timeSrt(c.end)}\n${c.text.trim()}\n`).join("\n")}
+function downloadText(name,content,type){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+function renderCaptions(){$("captionList").innerHTML="";captions.forEach((c,i)=>{const d=document.createElement("div");d.className="caption-row";d.innerHTML=`<div class="small">Caption ${i+1} · ${timeSrt(c.start)} – ${timeSrt(c.end)}</div><textarea aria-label="Caption ${i+1}">${escapeHtml(c.text)}</textarea>`;d.querySelector("textarea").addEventListener("input",e=>captions[i].text=e.target.value);$("captionList").appendChild(d)});$("editCard").classList.remove("hidden")}
+$("videoFile").addEventListener("change",()=>{const f=$("videoFile").files?.[0];if(!f)return;sourceFile=f;if(sourceUrl)URL.revokeObjectURL(sourceUrl);sourceUrl=URL.createObjectURL(f);$("preview").src=sourceUrl;$("preview").classList.remove("hidden");$("editCard").classList.add("hidden");$("exportStatus").classList.add("hidden");$("videoDownload").classList.add("hidden");captions=[];setProgress(0);status(`Selected: ${f.name} (${(f.size/1024/1024).toFixed(1)} MB).`)});
+$("srtBtn").addEventListener("click",()=>{if(captions.length)downloadText("captions.srt",getSrt(),"text/plain;charset=utf-8")});
+async function ensureFFmpeg(report){
+ if(ffmpegReady&&ffmpeg)return ffmpeg;
+ report("Loading audio tools… This may take a few minutes the first time.");
+ const {FFmpeg}=await import("https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js");
+ const {toBlobURL}=await import("https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js");
+ ffmpeg=new FFmpeg();
+ ffmpeg.on("log",({message})=>{if(message&&!$("exportStatus").classList.contains("hidden"))$("exportStatus").textContent=message.slice(-500)});
+ const base="https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd";
+ await ffmpeg.load({coreURL:await toBlobURL(base+"/ffmpeg-core.js","text/javascript"),wasmURL:await toBlobURL(base+"/ffmpeg-core.wasm","application/wasm")});
+ ffmpegReady=true;return ffmpeg;
+}
+async function extractAudio(file,report){
+ const engine=await ensureFFmpeg(report);
+ const ext=(file.name.split(".").pop()||"mp4").replace(/[^a-z0-9]/gi,"").toLowerCase()||"mp4";
+ const input="audio-input."+ext,output="audio-16k.wav";
+ report("Reading video file…");
+ await engine.writeFile(input,new Uint8Array(await file.arrayBuffer()));
+ report("Extracting audio…");
+ await engine.exec(["-y","-i",input,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",output]);
+ report("Preparing audio for speech recognition…");
+ const wav=await engine.readFile(output),bytes=wav instanceof Uint8Array?wav:new Uint8Array(wav);
+ if(bytes.length<44)throw new Error("Audio extraction returned an invalid WAV file. Try another MP4.");
+ const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+ let offset=12,dataOffset=-1,dataSize=0,sampleRate=0,bitsPerSample=0,format=0;
+ while(offset+8<=bytes.length){
+  const id=String.fromCharCode(bytes[offset],bytes[offset+1],bytes[offset+2],bytes[offset+3]);
+  const size=view.getUint32(offset+4,true),body=offset+8;
+  if(id==="fmt "){format=view.getUint16(body,true);sampleRate=view.getUint32(body+4,true);bitsPerSample=view.getUint16(body+14,true)}
+  if(id==="data"){dataOffset=body;dataSize=Math.min(size,bytes.length-body);break}
+  offset=body+size+(size%2);
+ }
+ if(dataOffset<0||format!==1||bitsPerSample!==16||sampleRate!==16000)throw new Error("Could not read extracted audio. Please try a short MP4 video.");
+ const count=Math.floor(dataSize/2),audio=new Float32Array(count);
+ for(let i=0;i<count;i++)audio[i]=view.getInt16(dataOffset+i*2,true)/32768;
+ audioDuration=count/sampleRate;
+ try{await engine.deleteFile(input)}catch(_){} try{await engine.deleteFile(output)}catch(_){}
+ // Free FFmpeg WASM memory before loading the speech model on a phone.
+ try{engine.terminate()}catch(_){} ffmpeg=null;ffmpegReady=false;
+ return audio;
+}
+$("generate").addEventListener("click",async()=>{
+ if(busy)return;if(!sourceFile){status("Please choose a video first.");return}
+ busy=true;$("generate").disabled=true;$("videoFile").disabled=true;setProgress(2);$("editCard").classList.add("hidden");
+ try{
+  // Extract audio first and release FFmpeg memory before loading Whisper.
+  const audio=await extractAudio(sourceFile,(message)=>{status(message);setProgress(12)});
+  status("Loading speech-recognition engine… Keep this page open. First use may download a large model.");setProgress(18);
+  const {pipeline,env}=await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
+  env.allowLocalModels=false;env.useBrowserCache=true;
+  const transcriber=await pipeline("automatic-speech-recognition","Xenova/whisper-tiny",{progress_callback:p=>{if(p.status==="progress"&&p.total)setProgress(Math.min(42,18+(p.loaded/p.total)*24));if(p.status==="downloading")status("Downloading speech model… Keep this page open; first use can take a while.")}});
+  status("Recognizing speech… Please wait.");setProgress(48);
+  const result=await transcriber(audio,{language:languageNames[$("language").value],task:"transcribe",return_timestamps:true,chunk_length_s:20,stride_length_s:3});
+  let chunks=result.chunks||[];if(!chunks.length&&result.text)chunks=[{timestamp:[0,Math.max(2,audioDuration||2)],text:result.text}];
+  captions=chunks.map(ch=>{const start=Number(ch.timestamp?.[0])||0,rawEnd=ch.timestamp?.[1],end=Number.isFinite(Number(rawEnd))?Number(rawEnd):start+3;return{start,end:Math.max(start+.2,end),text:(ch.text||"").trim()}}).filter(c=>c.text);
+  if(!captions.length)throw new Error("No speech was recognized. Try a clearer video with less background music.");
+  setProgress(100);renderCaptions();status(`Done! Created ${captions.length} caption segments. Review them below.`);
+ }catch(e){console.error(e);status("Could not generate captions.\n"+(e?.message||String(e))+"\n\nTry a short MP4 video in Chrome. Keep the page open during downloads. If your phone runs out of memory, try a shorter video or use a computer.");setProgress(0)}
+ finally{busy=false;$("generate").disabled=false;$("videoFile").disabled=false}
+});
+$("burnBtn").addEventListener("click",async()=>{
+ if(!sourceFile||!captions.length||$("burnBtn").disabled)return;$("burnBtn").disabled=true;$("videoDownload").classList.add("hidden");
+ try{
+  const engine=await ensureFFmpeg(exportStatus);exportStatus("Preparing video and subtitles…");
+  const ext=(sourceFile.name.split(".").pop()||"mp4").replace(/[^a-z0-9]/gi,"").toLowerCase()||"mp4",input="video-input."+ext,output="captioned.mp4";
+  await engine.writeFile(input,new Uint8Array(await sourceFile.arrayBuffer()));await engine.writeFile("captions.srt",new TextEncoder().encode(getSrt()));
+  const size=Number($("fontSize").value),pos=$("position").value,alignment=pos==="top"?6:pos==="center"?5:2;
+  const filter=`subtitles=captions.srt:force_style='FontName=Arial,FontSize=${size},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=${alignment},MarginV=35'`;
+  exportStatus("Rendering captioned video… This may take several minutes on a phone.");
+  await engine.exec(["-y","-i",input,"-vf",filter,"-c:v","libx264","-preset","ultrafast","-crf","25","-c:a","aac","-b:a","128k","-movflags","+faststart",output]);
+  const data=await engine.readFile(output),blob=new Blob([data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength)],{type:"video/mp4"}),url=URL.createObjectURL(blob);
+  $("videoDownload").href=url;$("videoDownload").classList.remove("hidden");exportStatus("Finished! Tap “Download captioned video” below.");
+ }catch(e){console.error(e);exportStatus("Video export failed: "+(e?.message||String(e))+"\n\nTry a shorter MP4. You can still download the SRT captions.")}finally{$("burnBtn").disabled=false}
+});
+</script>
+</body>
+</html>
